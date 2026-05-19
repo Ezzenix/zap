@@ -88,6 +88,28 @@ impl<'src> Converter<'src> {
 		}
 
 		for (decls, path) in nsdecls
+			.iter()
+			.map(|(decls, path)| (*decls, path.clone()))
+			.chain(std::iter::once((&config.decls, vec![])))
+		{
+			let current_tydecls = decls.iter().filter_map(|decl| match decl {
+				SyntaxDecl::Ty(tydecl) => Some(tydecl),
+				_ => None,
+			});
+
+			for tydecl in current_tydecls {
+				self.tydecls.insert(
+					path.iter()
+						.copied()
+						.chain(std::iter::once(tydecl.name.name))
+						.collect::<Vec<_>>()
+						.join("."),
+					tydecl.clone(),
+				);
+			}
+		}
+
+		for (decls, path) in nsdecls
 			.into_iter()
 			// reverse so namespaces higher can use types from namespaces lower
 			.rev()
@@ -99,18 +121,6 @@ impl<'src> Converter<'src> {
 				SyntaxDecl::Ty(tydecl) => Some(tydecl),
 				_ => None,
 			});
-
-			for tydecl in current_tydecls.clone() {
-				self.tydecls.insert(
-					self.path
-						.iter()
-						.copied()
-						.chain(std::iter::once(tydecl.name.name))
-						.collect::<Vec<_>>()
-						.join("."),
-					tydecl.clone(),
-				);
-			}
 
 			for tydecl in current_tydecls {
 				let tydecl = self.tydecl(tydecl);
@@ -701,7 +711,7 @@ impl<'src> Converter<'src> {
 			.collect::<Vec<_>>()
 			.join(".");
 
-		let recursion_type = self.ty_recursion_kind(&key, &tydecl.ty, &mut HashSet::new());
+		let recursion_type = self.ty_recursion_kind(&key, &tydecl.ty, &self.path, &mut HashSet::new());
 
 		let ty = if let Some(ty) = self.resolved_tys.get(&*key) {
 			ty.clone()
@@ -878,15 +888,22 @@ impl<'src> Converter<'src> {
 				"unknown" => Ty::Opt(Box::new(Ty::Unknown)),
 
 				_ => {
-					let path = self
-						.path
-						.iter()
-						.copied()
-						.chain(std::iter::once(ref_ty.name))
-						.collect::<Vec<_>>()
-						.join(".");
+					let mut found = None;
+					for i in (0..=self.path.len()).rev() {
+						let path = self.path[..i]
+							.iter()
+							.copied()
+							.chain(std::iter::once(ref_ty.name))
+							.collect::<Vec<_>>()
+							.join(".");
 
-					let Some(tydecl) = self.tydecls.get(&path).cloned() else {
+						if let Some(tydecl) = self.tydecls.get(&path).cloned() {
+							found = Some((tydecl, self.path[..i].to_vec()));
+							break;
+						}
+					}
+
+					let Some((tydecl, decl_path)) = found else {
 						self.report(Report::AnalyzeUnknownTypeRef {
 							span: ref_ty.span(),
 							name: Cow::Borrowed(ref_ty.name),
@@ -895,7 +912,10 @@ impl<'src> Converter<'src> {
 						return Ty::Opt(Box::new(Ty::Unknown));
 					};
 
+					let old_path = std::mem::replace(&mut self.path, decl_path);
 					let tydecl = self.tydecl(&tydecl);
+					self.path = old_path;
+
 					if tydecl.inline {
 						(*tydecl.ty.borrow()).clone()
 					} else {
@@ -905,15 +925,28 @@ impl<'src> Converter<'src> {
 			},
 
 			SyntaxTyKind::Path(raw_path) => {
-				let path = self
-					.path
-					.iter()
-					.copied()
-					.chain(raw_path.iter().map(|i| i.name))
-					.collect::<Vec<_>>()
-					.join(".");
+				let mut found = None;
+				for i in (0..=self.path.len()).rev() {
+					let path_str = self.path[..i]
+						.iter()
+						.copied()
+						.chain(raw_path.iter().map(|i| i.name))
+						.collect::<Vec<_>>()
+						.join(".");
 
-				let Some(tydecl) = self.all_tydecls.get(&path).cloned() else {
+					if let Some(tydecl) = self.tydecls.get(&path_str).cloned() {
+						let decl_path: Vec<&'src str> = self.path[..i]
+							.iter()
+							.copied()
+							.chain(raw_path.iter().map(|i| i.name).take(raw_path.len() - 1))
+							.collect();
+
+						found = Some((tydecl, decl_path));
+						break;
+					}
+				}
+
+				let Some((tydecl, decl_path)) = found else {
 					self.report(Report::AnalyzeUnknownTypeRef {
 						span: ty.span(),
 						name: Cow::Owned(raw_path.iter().map(|i| i.name).collect::<Vec<_>>().join(".")),
@@ -921,6 +954,10 @@ impl<'src> Converter<'src> {
 
 					return Ty::Opt(Box::new(Ty::Unknown));
 				};
+
+				let old_path = std::mem::replace(&mut self.path, decl_path);
+				let tydecl = self.tydecl(&tydecl);
+				self.path = old_path;
 
 				if tydecl.inline {
 					(*tydecl.ty.borrow()).clone()
@@ -1089,28 +1126,40 @@ impl<'src> Converter<'src> {
 		&self,
 		target_path: &str,
 		ty: &SyntaxTy<'src>,
+		path: &[&'src str],
 		searched: &mut HashSet<String>,
 	) -> TyRecursionKind<'src> {
 		match &ty.kind {
 			SyntaxTyKind::Arr(ty, len) => {
 				let len = len.map(|len| self.range(&len)).unwrap_or_default();
 
-				// if array does not have a min size of 0, it is unbounded
 				if len.min().is_some_and(|min| min != 0.0) {
-					self.ty_recursion_kind(target_path, ty, searched)
+					self.ty_recursion_kind(target_path, ty, path, searched)
 				} else {
 					TyRecursionKind::None
 				}
 			}
 
 			SyntaxTyKind::Ref(ref_ty) => {
-				let key = self
-					.path
-					.iter()
-					.copied()
-					.chain(std::iter::once(ref_ty.name))
-					.collect::<Vec<_>>()
-					.join(".");
+				let mut found = None;
+				for i in (0..=path.len()).rev() {
+					let key = path[..i]
+						.iter()
+						.copied()
+						.chain(std::iter::once(ref_ty.name))
+						.collect::<Vec<_>>()
+						.join(".");
+
+					if self.tydecls.contains_key(&key) {
+						found = Some((key, path[..i].to_vec()));
+						break;
+					}
+				}
+
+				let (key, decl_path) = found.unwrap_or_else(|| {
+					let key = path.iter().copied().chain(std::iter::once(ref_ty.name)).collect::<Vec<_>>().join(".");
+					(key, path.to_vec())
+				});
 
 				if key == target_path {
 					TyRecursionKind::Unbounded(*ref_ty)
@@ -1118,45 +1167,62 @@ impl<'src> Converter<'src> {
 					TyRecursionKind::None
 				} else if let Some(tydecl) = self.tydecls.get(&key) {
 					searched.insert(key);
-					self.ty_recursion_kind(target_path, &tydecl.ty, searched)
+					self.ty_recursion_kind(target_path, &tydecl.ty, &decl_path, searched)
 				} else {
 					TyRecursionKind::None
 				}
 			}
 
-			SyntaxTyKind::Path(path) => {
-				let path = self
-					.path
-					.iter()
-					.copied()
-					.chain(path.iter().map(|i| i.name))
-					.collect::<Vec<_>>()
-					.join(".");
+			SyntaxTyKind::Path(raw_path) => {
+				let mut found = None;
+				for i in (0..=path.len()).rev() {
+					let key = path[..i]
+						.iter()
+						.copied()
+						.chain(raw_path.iter().map(|i| i.name))
+						.collect::<Vec<_>>()
+						.join(".");
 
-				if searched.contains(&path) {
+					if self.tydecls.contains_key(&key) {
+						let decl_path: Vec<&'src str> = path[..i]
+							.iter()
+							.copied()
+							.chain(raw_path.iter().map(|i| i.name).take(raw_path.len() - 1))
+							.collect();
+
+						found = Some((key, decl_path));
+						break;
+					}
+				}
+
+				let (key, decl_path) = found.unwrap_or_else(|| {
+					let key = path.iter().copied().chain(raw_path.iter().map(|i| i.name)).collect::<Vec<_>>().join(".");
+					(key, path.to_vec())
+				});
+
+				if searched.contains(&key) {
 					TyRecursionKind::None
-				} else if let Some(tydecl) = self.tydecls.get(&path) {
-					searched.insert(path);
-					self.ty_recursion_kind(target_path, &tydecl.ty, searched)
+				} else if let Some(tydecl) = self.tydecls.get(&key) {
+					searched.insert(key);
+					self.ty_recursion_kind(target_path, &tydecl.ty, &decl_path, searched)
 				} else {
 					TyRecursionKind::None
 				}
 			}
 
-			SyntaxTyKind::Enum(enum_ty) => self.enum_recursion_kind(target_path, enum_ty, searched),
-			SyntaxTyKind::Struct(struct_ty) => self.struct_recursion_kind(target_path, struct_ty, searched),
-			SyntaxTyKind::Set(key_ty) => self.ty_recursion_kind(target_path, key_ty, searched),
+			SyntaxTyKind::Enum(enum_ty) => self.enum_recursion_kind(target_path, enum_ty, path, searched),
+			SyntaxTyKind::Struct(struct_ty) => self.struct_recursion_kind(target_path, struct_ty, path, searched),
+			SyntaxTyKind::Set(key_ty) => self.ty_recursion_kind(target_path, key_ty, path, searched),
 			SyntaxTyKind::Or(tys) => tys
 				.iter()
-				.find_map(|ty| match self.ty_recursion_kind(target_path, ty, searched) {
+				.find_map(|ty| match self.ty_recursion_kind(target_path, ty, path, searched) {
 					TyRecursionKind::None => None,
 					kind => Some(kind),
 				})
 				.unwrap_or(TyRecursionKind::None),
 
-			SyntaxTyKind::Opt(ty) => match self.ty_recursion_kind(target_path, ty, searched) {
+			SyntaxTyKind::Opt(ty) => match self.ty_recursion_kind(target_path, ty, path, searched) {
 				TyRecursionKind::None => TyRecursionKind::None,
-				// it is bounded because it's optional
 				_ => TyRecursionKind::Recursive,
 			},
 
@@ -1168,6 +1234,7 @@ impl<'src> Converter<'src> {
 		&self,
 		target_path: &str,
 		ty: &SyntaxEnum<'src>,
+		path: &[&'src str],
 		searched: &mut HashSet<String>,
 	) -> TyRecursionKind<'src> {
 		match &ty.kind {
@@ -1177,7 +1244,7 @@ impl<'src> Converter<'src> {
 				let mut kind = TyRecursionKind::None;
 
 				for variant in variants.iter() {
-					match self.struct_recursion_kind(target_path, &variant.1, searched) {
+					match self.struct_recursion_kind(target_path, &variant.1, path, searched) {
 						TyRecursionKind::Unbounded(ident) => return TyRecursionKind::Unbounded(ident),
 						TyRecursionKind::Recursive => kind = TyRecursionKind::Recursive,
 						TyRecursionKind::None => {}
@@ -1193,12 +1260,13 @@ impl<'src> Converter<'src> {
 		&self,
 		target_path: &str,
 		ty: &SyntaxStruct<'src>,
+		path: &[&'src str],
 		searched: &mut HashSet<String>,
 	) -> TyRecursionKind<'src> {
 		let mut kind = TyRecursionKind::None;
 
 		for field in ty.fields.iter() {
-			match self.ty_recursion_kind(target_path, &field.1, searched) {
+			match self.ty_recursion_kind(target_path, &field.1, path, searched) {
 				TyRecursionKind::Unbounded(ident) => return TyRecursionKind::Unbounded(ident),
 				TyRecursionKind::Recursive => kind = TyRecursionKind::Recursive,
 				TyRecursionKind::None => {}
