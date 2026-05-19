@@ -106,3 +106,16 @@ local types = {}
 
 local polling_queues_reliable = {}
 local polling_queues_unreliable = {}
+
+if not RunService:IsRunning() then
+	local tbl
+	tbl = setmetatable({}, {
+		__index = function()
+			return tbl
+		end,
+		__call = function()
+			
+		end,
+	})
+	return tbl :: Events
+end

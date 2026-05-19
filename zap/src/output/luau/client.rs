@@ -57,108 +57,6 @@ impl<'src> ClientOutput<'src> {
 		}
 	}
 
-	fn push_studio(&mut self) {
-		self.push_line("if not RunService:IsRunning() then");
-		self.indent();
-
-		self.push_line("local noop = function() end");
-
-		self.push_line("return table.freeze({");
-		self.indent();
-
-		let fire = self.config.casing.with("Fire", "fire", "fire");
-		let set_callback = self.config.casing.with("SetCallback", "setCallback", "set_callback");
-		let iter = self.config.casing.with("Iter", "iter", "iter");
-		let on = self.config.casing.with("On", "on", "on");
-		let call = self.config.casing.with("Call", "call", "call");
-
-		let send_events = self.config.casing.with("SendEvents", "sendEvents", "send_events");
-
-		self.push_line(&format!("{send_events} = noop,"));
-
-		self.config.traverse_namespaces(
-			self,
-			|this, diff| {
-				for _ in 0..diff {
-					this.dedent();
-					this.push_line("}),");
-				}
-			},
-			|this, path, entry| {
-				let name = path.last().unwrap();
-				this.push_line(&format!("{name} = table.freeze({{"));
-				this.indent();
-
-				match entry {
-					NamespaceEntry::EvDecl(ev) => {
-						if ev.from == EvSource::Client {
-							this.push_line(&format!("{fire} = noop"));
-						} else {
-							match ev.call {
-								EvCall::SingleSync | EvCall::SingleAsync => {
-									this.push_line(&format!("{set_callback} = noop"))
-								}
-								EvCall::ManySync | EvCall::ManyAsync => this.push_line(&format!("{on} = noop")),
-								EvCall::Polling => {
-									this.push_line(&format!("{iter} = function()"));
-									this.indent();
-									this.push_line("return noop");
-									this.dedent();
-									this.push_line("end");
-								}
-							}
-						}
-
-						this.dedent();
-						this.push_line("}),");
-					}
-					NamespaceEntry::FnDecl(fndecl) => {
-						this.push_indent();
-						this.push(&format!("{call} = "));
-
-						match self.config.yield_type {
-							YieldType::Yield => this.push("noop\n"),
-							YieldType::Future => {
-								this.push("function()\n");
-								this.indent();
-								this.push_line("return Future.new(function()");
-								this.indent();
-								this.push_line(&format!(
-									"error(\"{} called when game is not running\")",
-									fndecl.display_path()
-								));
-								this.dedent();
-								this.push_line("end)");
-								this.dedent();
-								this.push_line("end");
-							}
-							YieldType::Promise => {
-								this.push("function()\n");
-								this.indent();
-								this.push_line(&format!(
-									"return Promise.reject(\"{} called when game is not running\")",
-									fndecl.display_path()
-								));
-								this.dedent();
-								this.push_line("end");
-							}
-						}
-
-						this.dedent();
-						this.push_line("}),");
-					}
-					NamespaceEntry::Ns(..) => {}
-				}
-			},
-		);
-
-		self.dedent();
-		self.push_line("}) :: Events");
-
-		self.dedent();
-		self.push_line("end");
-	}
-
 	fn push_tydecl(&mut self, tydecl: &TyDecl) {
 		let ty = &*tydecl.ty.borrow();
 
@@ -1477,8 +1375,6 @@ impl<'src> ClientOutput<'src> {
 		};
 
 		self.push(include_str!("base.luau"));
-
-		self.push_studio();
 
 		self.push_remotes();
 

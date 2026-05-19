@@ -57,91 +57,6 @@ impl<'src> ServerOutput<'src> {
 		}
 	}
 
-	fn push_studio(&mut self) {
-		self.push_line("if not RunService:IsRunning() then");
-		self.indent();
-
-		self.push_line("local noop = function() end");
-
-		self.push_line("return table.freeze({");
-		self.indent();
-
-		let fire = self.config.casing.with("Fire", "fire", "fire");
-		let fire_all = self.config.casing.with("FireAll", "fireAll", "fire_all");
-		let fire_except = self.config.casing.with("FireExcept", "fireExcept", "fire_except");
-		let fire_list = self.config.casing.with("FireList", "fireList", "fire_list");
-		let fire_set = self.config.casing.with("FireSet", "fireSet", "fire_set");
-
-		let set_callback = self.config.casing.with("SetCallback", "setCallback", "set_callback");
-		let iter = self.config.casing.with("Iter", "iter", "iter");
-		let on = self.config.casing.with("On", "on", "on");
-
-		let send_events = self.config.casing.with("SendEvents", "sendEvents", "send_events");
-
-		self.push_line(&format!("{send_events} = noop,"));
-
-		self.config.traverse_namespaces(
-			self,
-			|this, diff| {
-				for _ in 0..diff {
-					this.dedent();
-					this.push_line("}),");
-				}
-			},
-			|this, path, entry| {
-				let name = path.last().unwrap();
-				this.push_line(&format!("{name} = table.freeze({{"));
-				this.indent();
-
-				match entry {
-					NamespaceEntry::EvDecl(evdecl) => {
-						if evdecl.from == EvSource::Client {
-							match evdecl.call {
-								EvCall::SingleSync | EvCall::SingleAsync => {
-									this.push_line(&format!("{set_callback} = noop"))
-								}
-								EvCall::ManySync | EvCall::ManyAsync => this.push_line(&format!("{on} = noop")),
-								EvCall::Polling => {
-									this.push_line(&format!("{iter} = function()"));
-									this.indent();
-									this.push_line("return noop");
-									this.dedent();
-									this.push_line("end");
-								}
-							}
-						} else {
-							this.push_line(&format!("{fire} = noop,"));
-
-							if !this.config.disable_fire_all {
-								this.push_line(&format!("{fire_all} = noop,"));
-							}
-
-							this.push_line(&format!("{fire_except} = noop,"));
-							this.push_line(&format!("{fire_list} = noop,"));
-							this.push_line(&format!("{fire_set} = noop"));
-						}
-
-						this.dedent();
-						this.push_line("}),");
-					}
-					NamespaceEntry::FnDecl(..) => {
-						this.push_line(&format!("{set_callback} = noop"));
-
-						this.dedent();
-						this.push_line("}),");
-					}
-					NamespaceEntry::Ns(..) => {}
-				}
-			},
-		);
-
-		self.dedent();
-		self.push_line("}) :: Events");
-
-		self.dedent();
-		self.push_line("end");
-	}
-
 	fn push_tydecl(&mut self, tydecl: &TyDecl) {
 		let ty = &*tydecl.ty.borrow();
 
@@ -1624,8 +1539,6 @@ impl<'src> ServerOutput<'src> {
 		};
 
 		self.push(include_str!("base.luau"));
-
-		self.push_studio();
 
 		self.push_create_remotes();
 
