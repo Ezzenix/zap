@@ -1,6 +1,7 @@
 use std::path::PathBuf;
 
-use anyhow::Result;
+use anyhow::{Result, anyhow};
+use std::path::Path;
 use clap::Parser;
 use codespan_reporting::{
 	diagnostic::Severity,
@@ -26,6 +27,10 @@ fn main() -> Result<()> {
 	let args = Args::parse();
 
 	let config_path = args.config.unwrap();
+
+	if !Path::new(&config_path).exists() {
+        return Err(anyhow!("File does not exist: {}", config_path.display()));
+    }
 
 	let config = std::fs::read_to_string(&config_path)?;
 
