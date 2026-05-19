@@ -28,109 +28,6 @@ pub trait Gen {
 		self.push_stmt(Stmt::Call(Var::from("alloc"), None, vec![expr]));
 	}
 
-	fn push_writef32(&mut self, expr: Expr) {
-		self.push_alloc(4.0.into());
-
-		self.push_stmt(Stmt::Call(
-			Var::from("buffer").nindex("writef32"),
-			None,
-			vec!["outgoing_buff".into(), "outgoing_apos".into(), expr],
-		));
-	}
-
-	fn push_writef64(&mut self, expr: Expr) {
-		self.push_alloc(8.0.into());
-
-		self.push_stmt(Stmt::Call(
-			Var::from("buffer").nindex("writef64"),
-			None,
-			vec!["outgoing_buff".into(), "outgoing_apos".into(), expr],
-		));
-	}
-
-	fn push_writeu8(&mut self, expr: Expr) {
-		self.push_alloc(1.0.into());
-
-		self.push_stmt(Stmt::Call(
-			Var::from("buffer").nindex("writeu8"),
-			None,
-			vec!["outgoing_buff".into(), "outgoing_apos".into(), expr],
-		));
-	}
-
-	fn push_writeu16(&mut self, expr: Expr) {
-		self.push_alloc(2.0.into());
-
-		self.push_stmt(Stmt::Call(
-			Var::from("buffer").nindex("writeu16"),
-			None,
-			vec!["outgoing_buff".into(), "outgoing_apos".into(), expr],
-		));
-	}
-
-	fn push_writeu32(&mut self, expr: Expr) {
-		self.push_alloc(4.0.into());
-
-		self.push_stmt(Stmt::Call(
-			Var::from("buffer").nindex("writeu32"),
-			None,
-			vec!["outgoing_buff".into(), "outgoing_apos".into(), expr],
-		));
-	}
-
-	fn push_writei8(&mut self, expr: Expr) {
-		self.push_alloc(1.0.into());
-
-		self.push_stmt(Stmt::Call(
-			Var::from("buffer").nindex("writei8"),
-			None,
-			vec!["outgoing_buff".into(), "outgoing_apos".into(), expr],
-		));
-	}
-
-	fn push_writei16(&mut self, expr: Expr) {
-		self.push_alloc(2.0.into());
-
-		self.push_stmt(Stmt::Call(
-			Var::from("buffer").nindex("writei16"),
-			None,
-			vec!["outgoing_buff".into(), "outgoing_apos".into(), expr],
-		));
-	}
-
-	fn push_writei32(&mut self, expr: Expr) {
-		self.push_alloc(4.0.into());
-
-		self.push_stmt(Stmt::Call(
-			Var::from("buffer").nindex("writei32"),
-			None,
-			vec!["outgoing_buff".into(), "outgoing_apos".into(), expr],
-		));
-	}
-
-	fn push_writenumty(&mut self, expr: Expr, numty: NumTy) {
-		match numty {
-			NumTy::F32 => self.push_writef32(expr),
-			NumTy::F64 => self.push_writef64(expr),
-			NumTy::U8 => self.push_writeu8(expr),
-			NumTy::U16 => self.push_writeu16(expr),
-			NumTy::U32 => self.push_writeu32(expr),
-			NumTy::I8 => self.push_writei8(expr),
-			NumTy::I16 => self.push_writei16(expr),
-			NumTy::I32 => self.push_writei32(expr),
-		}
-	}
-
-	fn push_writestring(&mut self, expr: Expr, count: Expr) {
-		self.push_alloc(count.clone());
-
-		self.push_stmt(Stmt::Call(
-			Var::from("buffer").nindex("writestring"),
-			None,
-			vec!["outgoing_buff".into(), "outgoing_apos".into(), expr, count],
-		));
-	}
-
 	fn readf32(&self) -> Expr {
 		Var::from("buffer")
 			.nindex("readf32")
@@ -347,6 +244,10 @@ impl OutputBuffer {
 
 	pub fn push<T: Into<OutputEntry>>(&self, item: T) {
 		self.0.borrow_mut().push(item.into());
+	}
+
+	pub fn len(&self) {
+		self.0.borrow_mut().len();
 	}
 
 	pub fn output(self) -> Vec<Stmt> {

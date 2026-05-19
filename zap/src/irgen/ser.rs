@@ -12,11 +12,22 @@ struct Ser<'src> {
 	var_occurrences: &'src mut HashMap<String, usize>,
 	scopes: Vec<Scope>,
 	typescript_enum_type: TypeScriptEnumType,
+	alloc_size: Vec<Expr>,
+	pending_stmts: Vec<Stmt>,
+	pending_write_stmts: Vec<Stmt>,
 }
 
 impl Gen for Ser<'_> {
 	fn push_stmt(&mut self, stmt: Stmt) {
-		self.buf.push(stmt);
+		if matches!(stmt, Stmt::If {..} | Stmt::ElseIf {..} | Stmt::Else {..} | Stmt::GenFor {..} | Stmt::NumFor {..} | Stmt::End {..}) {
+			self.flush_pending();
+		}
+
+		self.pending_stmts.push(stmt);
+	}
+
+	fn push_alloc(&mut self, expr: Expr) {
+		self.alloc_size.push(expr);
 	}
 
 	fn generate<'a, 'src: 'a, I>(mut self, names: &[String], types: I) -> Vec<Stmt>
@@ -39,6 +50,7 @@ impl Gen for Ser<'_> {
 	}
 
 	fn new_scope(&mut self) {
+		self.flush_pending();
 		let scope_buf = OutputBuffer::new();
 		self.buf.push(scope_buf.clone());
 		self.scopes.push(Scope {
@@ -52,6 +64,7 @@ impl Gen for Ser<'_> {
 	}
 
 	fn end_scope(&mut self) {
+		self.flush_pending();
 		let scope = self.scopes.pop().unwrap();
 
 		for (shift, name) in scope.bitpack_budget {
@@ -81,6 +94,127 @@ impl Gen for Ser<'_> {
 }
 
 impl Ser<'_> {
+	fn flush_pending(&mut self) {
+		for stmt in &self.pending_stmts {
+			self.buf.push(stmt.clone());
+		}
+
+		if !&self.alloc_size.is_empty() {
+			let total_alloc = self.fold_exprs(&self.alloc_size);
+
+			self.buf.push(Stmt::Call(
+				Var::from("alloc"), 
+				None, 
+				vec![total_alloc]
+			));
+		}
+
+		for stmt in &self.pending_write_stmts {
+			self.buf.push(stmt.clone());
+		}
+
+		self.alloc_size.clear();
+		self.pending_stmts.clear();
+		self.pending_write_stmts.clear();
+	}
+
+	fn fold_exprs(&self, exprs: &[Expr]) -> Expr {
+		let mut static_sum = 0.0;
+		let mut dynamics = Vec::new();
+
+		for expr in exprs {
+			match expr {
+				Expr::Num(n) => static_sum += n,
+				_ => dynamics.push(expr.clone()),
+			}
+		}
+
+		let static_part = (static_sum != 0.0).then(|| Expr::Num(static_sum));
+		let all_exprs = static_part.into_iter().chain(dynamics);
+
+		all_exprs.reduce(|acc, e| acc.add(e))
+				.unwrap_or(Expr::Num(0.0))
+	}
+
+	fn get_outgoing_apos(&mut self) -> Expr {
+		let total_offset = if let Some((_last, rest)) = self.alloc_size.split_last() {
+			self.fold_exprs(rest)
+		} else {
+			Expr::Num(0.0)
+		};
+
+		let base_var = Expr::Var(Box::new(Var::from("outgoing_apos")));
+
+		match total_offset {
+			Expr::Num(n) if n == 0.0 => base_var,
+			_ => base_var.add(total_offset),
+		}
+	}
+
+	fn push_write_call(&mut self, method: &str, size: Expr, mut args: Vec<Expr>) {
+        self.push_alloc(size);
+
+        let apos = self.get_outgoing_apos();
+
+        let mut final_args = vec!["outgoing_buff".into(), apos];
+        final_args.append(&mut args);
+
+		self.pending_write_stmts.push(Stmt::Call(
+            Var::from("buffer").nindex(method),
+            None,
+            final_args,
+        ));
+    }
+
+	fn push_writef32(&mut self, expr: Expr) {
+		self.push_write_call("writef32", 4.0.into(), vec![expr]);
+	}
+
+	fn push_writef64(&mut self, expr: Expr) {
+		self.push_write_call("writef64", 8.0.into(), vec![expr]);
+	}
+
+	fn push_writeu8(&mut self, expr: Expr) {
+		self.push_write_call("writeu8", 1.0.into(), vec![expr]);
+	}
+
+	fn push_writeu16(&mut self, expr: Expr) {
+		self.push_write_call("writeu16", 2.0.into(), vec![expr]);
+	}
+
+	fn push_writeu32(&mut self, expr: Expr) {
+		self.push_write_call("writeu32", 4.0.into(), vec![expr]);
+	}
+
+	fn push_writei8(&mut self, expr: Expr) {
+		self.push_write_call("writei8", 1.0.into(), vec![expr]);
+	}
+
+	fn push_writei16(&mut self, expr: Expr) {
+		self.push_write_call("writei16", 2.0.into(), vec![expr]);
+	}
+
+	fn push_writei32(&mut self, expr: Expr) {
+		self.push_write_call("writei32", 4.0.into(), vec![expr]);
+	}
+
+	fn push_writenumty(&mut self, expr: Expr, numty: NumTy) {
+		match numty {
+			NumTy::F32 => self.push_writef32(expr),
+			NumTy::F64 => self.push_writef64(expr),
+			NumTy::U8 => self.push_writeu8(expr),
+			NumTy::U16 => self.push_writeu16(expr),
+			NumTy::U32 => self.push_writeu32(expr),
+			NumTy::I8 => self.push_writei8(expr),
+			NumTy::I16 => self.push_writei16(expr),
+			NumTy::I32 => self.push_writei32(expr),
+		}
+	}
+
+	fn push_writestring(&mut self, expr: Expr, count: Expr) {
+		self.push_write_call("writestring", count.clone(), vec![expr, count]);
+	}
+
 	fn push_struct(&mut self, struct_ty: &Struct, from: Var) {
 		for (name, ty) in struct_ty.fields.iter() {
 			self.push_ty(ty, from.clone().eindex(Expr::Str((*name).into())));
@@ -726,6 +860,9 @@ where
 		var_occurrences,
 		scopes: vec![],
 		typescript_enum_type,
+		alloc_size: vec![],
+		pending_stmts: vec![],
+		pending_write_stmts: vec![]
 	}
 	.generate(names, types.into_iter())
 }
