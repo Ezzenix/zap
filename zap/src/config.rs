@@ -53,6 +53,10 @@ pub struct Config<'src> {
 	pub yield_type: YieldType,
 	pub async_lib: &'src str,
 	pub disable_fire_all: bool,
+
+	pub max_packet_size: f64,
+	pub max_receive: f64,
+	pub log_packet_size: bool,
 }
 
 impl<'src> Config<'src> {

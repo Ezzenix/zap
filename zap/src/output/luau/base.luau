@@ -11,6 +11,9 @@ local incoming_inst: { Instance }
 local incoming_ipos: number
 local incoming_ids: { number }
 
+local ratelimit_bucket: number
+local ratelimit_last_tick: number
+
 -- thanks to https://dom.rojo.space/binary.html#cframe
 local CFrameSpecialCases = {
 	CFrame.Angles(0, 0, 0),
@@ -72,6 +75,8 @@ local function save()
 		inst = outgoing_inst,
 		outgoing_ids = outgoing_ids,
 		incoming_ids = incoming_ids,
+		ratelimit_bucket = ratelimit_bucket,
+		ratelimit_last_tick = ratelimit_last_tick
 	}
 end
 
@@ -82,6 +87,8 @@ local function load(data: {
 	inst: { Instance },
 	outgoing_ids: { number },
 	incoming_ids: { number },
+	ratelimit_bucket: number,
+	ratelimit_last_tick: number,
 })
 	outgoing_buff = data.buff
 	outgoing_used = data.used
@@ -89,6 +96,8 @@ local function load(data: {
 	outgoing_inst = data.inst
 	outgoing_ids = data.outgoing_ids
 	incoming_ids = data.incoming_ids
+	ratelimit_bucket = data.ratelimit_bucket
+	ratelimit_last_tick = data.ratelimit_last_tick
 end
 
 local function load_empty()
@@ -98,6 +107,8 @@ local function load_empty()
 	outgoing_inst = {}
 	outgoing_ids = {}
 	incoming_ids = {}
+	ratelimit_bucket = 0
+	ratelimit_last_tick = os.clock()
 end
 
 load_empty()

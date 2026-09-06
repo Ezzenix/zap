@@ -235,6 +235,10 @@ impl<'src> Converter<'src> {
 		let yield_type = self.yield_type_opt(typescript, &config.opts);
 		let async_lib = self.async_lib(yield_type, &config.opts, typescript);
 		let (disable_fire_all, ..) = self.boolean_opt("disable_fire_all", false, &config.opts);
+		
+		let (max_packet_size, ..) = self.num_opt("max_packet_size", 0.0, &config.opts);
+		let (max_receive, ..) = self.num_opt("max_receive", 0.0, &config.opts);
+		let (log_packet_size, ..) = self.boolean_opt("log_packet_size", false, &config.opts);
 
 		let config = Config {
 			tydecls: self.all_tydecls.drain().map(|(_, tydecl)| tydecl).collect(),
@@ -264,6 +268,10 @@ impl<'src> Converter<'src> {
 			yield_type,
 			async_lib,
 			disable_fire_all,
+
+			max_packet_size,
+			max_receive,
+			log_packet_size
 		};
 
 		self.check_empty_file(&config);

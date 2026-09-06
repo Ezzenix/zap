@@ -150,6 +150,21 @@ impl<'src> ServerOutput<'src> {
 	}
 
 	fn push_reliable_header(&mut self) {
+		if self.config.log_packet_size {
+			self.push_line("local max_ratelimit_bucket = 0");
+			self.push_line("local max_packet_size = 0");
+			self.push_line("coroutine.wrap(function()");
+			self.indent();
+			self.push_line("while true do");
+			self.indent();
+			self.push_line("print(`[ZAP] max_packet_size = {max_packet_size}, max_ratelimit_bucket = {max_ratelimit_bucket}`)");
+			self.push_line("task.wait(1)");
+			self.dedent();
+			self.push_line("end");
+			self.dedent();
+			self.push_line("end)()");
+		}
+
 		self.push_line("reliable.OnServerEvent:Connect(function(player, buff, inst)");
 		self.indent();
 
@@ -163,6 +178,45 @@ impl<'src> ServerOutput<'src> {
 		self.push_line("incoming_ipos = 0");
 
 		self.push_line("local len = buffer.len(buff)");
+
+		if self.config.log_packet_size {
+			self.push_line("max_packet_size = math.max(max_packet_size, len)");
+		}
+
+		if self.config.max_packet_size > 0.0 {
+			self.push_line(&format!("if len > {} then", self.config.max_packet_size));
+			self.indent();
+			self.push_line("warn(`[ZAP] Dropping packet from {player.Name} ({len})`)");
+			self.push_line("player_map[player] = save()");
+			self.push_line("return");
+			self.dedent();
+			self.push_line("end")
+		}
+
+		if self.config.max_receive > 0.0 || self.config.log_packet_size {
+			self.push_line("load_player(player)");
+			self.push_line("local now = os.clock()");
+			self.push_line("local delta = now - ratelimit_last_tick");
+			self.push_line("ratelimit_last_tick = now");
+			self.push_line(&format!(
+				"ratelimit_bucket = math.max(0, ratelimit_bucket - (delta * {}))",
+				self.config.max_receive
+			));
+			self.push_line("ratelimit_bucket += len");
+			if self.config.log_packet_size {
+				self.push_line("max_ratelimit_bucket = math.max(max_ratelimit_bucket, ratelimit_bucket)");
+			}
+			if self.config.max_receive > 0.0 {
+				self.push_line(&format!("if ratelimit_bucket > {} then", self.config.max_receive));
+				self.indent();
+				self.push_line("warn(`[ZAP] {player.Name} is sending too fast, dropping packet.`)");
+				self.push_line("player_map[player] = save()");
+				self.push_line("return");
+				self.dedent();
+				self.push_line("end")
+			}
+		}
+
 		self.push_line("while incoming_read < len do");
 
 		self.indent();
@@ -502,6 +556,10 @@ impl<'src> ServerOutput<'src> {
 
 		if self.config.include_profile_labels {
 			self.push_line("debug.profileend()");
+		}
+
+		if self.config.max_receive >= 0.0 || self.config.log_packet_size {
+			self.push_line("player_map[player] = save()")
 		}
 
 		self.dedent();
